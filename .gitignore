@@ -1,2 +1,15 @@
 outputs/
 outputs_os/
+
+# Prompt Evolution experiment outputs
+outputs/
+runs/
+
+# Local configuration and generated reports
+.env
+*.html
+prompt_design_usage.json
+
+# Python cache
+__pycache__/
+*.py[cod]

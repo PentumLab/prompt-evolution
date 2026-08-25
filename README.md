@@ -1,90 +1,49 @@
-<div align="center">
+# Prompt Evolution
 
-<!-- Logo/Banner placeholder - uncomment and add your image -->
-<!-- <img src="assets/banner.png" alt="HyperAgents Banner" width="800"> -->
+Prompt Evolution ist ein auf HyperAgents basierendes Framework zur evolutionären Optimierung von Prompts.
 
-<h1>HyperAgents</h1>
+Ein Task-Agent erzeugt einen Kandidaten-Prompt. Dieser wird bewertet. Ein Meta-Agent analysiert die Bewertung und kann die Prompt-Generierungsstrategie sowie – je nach Experiment – weitere Teile des Agentenablaufs verändern. Die nächste Generation wird anschließend erneut ausgeführt und bewertet.
 
-<p>Self-referential self-improving agents that can optimize for any computable task</p>
+## Aktueller Schwerpunkt
 
-<p>
-<a href="LICENSE.md"><img src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg?style=for-the-badge" alt="License: CC BY-NC-SA 4.0"></a>
-<a href="https://arxiv.org/abs/2603.19461"><img src="https://img.shields.io/badge/arXiv-2603.19461-b31b1b.svg?style=for-the-badge&logo=arxiv" alt="arXiv"></a>
-<a href="https://ai.meta.com/research/publications/hyperagents/"><img src="https://img.shields.io/badge/-Blog-%238D6748?style=for-the-badge&logo=Website&logoColor=white"></a>
-<a href="https://x.com/jennyzhangzt/status/2036099935083618487"><img src="https://img.shields.io/badge/twitter-%230077B5.svg?&style=for-the-badge&logo=twitter&logoColor=white&color=00acee"></a>
-</p>
+Die erste Referenzaufgabe ist die Evolution eines System-Prompts für einen evidenzbasierten Fact-Checker.
 
----
+Das Projekt soll später zusätzlich Deliberation zwischen mehreren Agenten unterstützen, beispielsweise:
 
-</div>
+1. gemeinsames Lesen eines Fachtexts,
+2. Diskussion der darin beschriebenen Probleme,
+3. Übertragung relevanter Erkenntnisse auf die aktuelle Aufgabe,
+4. autonome Anpassung des Agentensystems.
 
-## Setup
-```bash
-# API keys, put these into .env file
-OPENAI_API_KEY=...
-ANTHROPIC_API_KEY=...
-GEMINI_API_KEY=...
-```
+## Basis
 
-```bash
-# Install things
-sudo dnf install -y python3.12-devel
-sudo dnf install -y graphviz graphviz-devel cmake ninja-build bzip2-devel zlib-devel ncurses-devel libffi-devel
-```
+Prompt Evolution basiert auf:
 
-```bash
-# Create virtual environment
-python3.12 -m venv venv_nat
-source venv_nat/bin/activate
-pip install -r requirements.txt
-pip install -r requirements_dev.txt
-# To build the docker container
-docker build --network=host -t hyperagents .
-```
+**HyperAgents**
+Meta Platforms, Inc. and affiliates
+Upstream: https://github.com/facebookresearch/HyperAgents
+Basis-Commit: `59a68f6`
 
-```bash
-# Setup initial agents
-bash ./setup_initial.sh
-```
+Die ursprüngliche HyperAgents-Dokumentation befindet sich in
+[`README_HYPERAGENTS.md`](README_HYPERAGENTS.md).
 
-## Running HyperAgents
+## Lizenz
 
-```bash
-# See the script for args, and baseline selections
-python generate_loop.py --domains <domain>
-```
+Dieses Projekt wird unter der Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License veröffentlicht.
 
-By default, outputs will be saved in `outputs/` directory.
+Siehe [`LICENSE.md`](LICENSE.md) und [`NOTICE.md`](NOTICE.md).
 
-## File Structure
-- `agent/` code for using foundation models
-- `analysis/` scripts used for plotting and analysis
-- `domains/` code for each domain
-- `utils/` common code used in the repo
-- `run_meta_agent.py` script to help run the meta agent and get the diffs
-- `meta_agent.py` main implementation of the meta agent
-- `task_agent.py` main implementation of the task agent
-- `generate_loop.py` entry point for running the algorithm
+## Status
 
-## Logs from Experiments
+Das Projekt befindet sich derzeit im experimentellen Aufbau.
 
-The experiment logs can be downloaded here: https://drive.google.com/drive/folders/164fKQWgLM18foOzSnpv0F_I3TNpX8u8-?usp=sharing
+## Modelle
 
-## Safety Consideration
-> [!WARNING]  
-> This repository involves executing untrusted, model-generated code. We strongly advise users to be aware of the associated safety risks. While it is highly unlikely that such code will perform overtly malicious actions under our current settings and with the models we use, it may still behave destructively due to limitations in model capability or alignment. By using this repository, you acknowledge and accept these risks.
+Das erste Prompt-Evolution-Beispiel verwendet standardmäßig:
 
-## Citing
-If you find this project useful, please consider citing:
-```bibtex
-@misc{zhang2026hyperagents,
-      title={Hyperagents}, 
-      author={Jenny Zhang and Bingchen Zhao and Wannan Yang and Jakob Foerster and Jeff Clune and Minqi Jiang and Sam Devlin and Tatiana Shavrina},
-      year={2026},
-      eprint={2603.19461},
-      archivePrefix={arXiv},
-      primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2603.19461}, 
-}
-```
+- einen lokal über vLLM bereitgestellten Task-Agent (`hosted_vllm/gemma-4`)
+- Claude Haiku 4.5 als Meta-Agent (`anthropic/claude-haiku-4-5-20251001`)
 
+API-Schlüssel und lokale Endpunkte werden nicht eingecheckt. Eine Vorlage befindet sich in `.env.example`.
+
+Die Modellkonfiguration soll in späteren Versionen vollständig konfigurierbar werden.

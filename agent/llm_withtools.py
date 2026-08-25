@@ -1,7 +1,7 @@
 import re
 import json
 
-from agent.llm import get_response_from_llm
+from agent.llm import get_response_from_llm, MAX_TOKENS
 from agent.tools import load_tools
 
 def get_tooluse_prompt(tool_infos=[]):
@@ -96,6 +96,7 @@ def chat_with_agent(
     tools_available=[],  # Empty list means no tools, 'all' means all tools
     multiple_tool_calls=False,  # Whether to allow multiple tool calls in a single response
     max_tool_calls=40,  # Maximum number of tool calls allowed in a single response, -1 for unlimited
+    max_tokens=MAX_TOKENS,
 ):
     get_response_fn = get_response_from_llm
     # Construct message
@@ -116,6 +117,7 @@ def chat_with_agent(
             msg=system_msg + msg,
             model=model,
             msg_history=new_msg_history,
+            max_tokens=max_tokens,
         )
         logging(f"Output: {repr(response)}")
         # logging(f"Info: {repr(info)}")
@@ -159,6 +161,7 @@ def chat_with_agent(
                 msg=system_msg + '\n\n'.join(tool_msgs),
                 model=model,
                 msg_history=new_msg_history,
+                max_tokens=max_tokens,
             )
             logging(f"Output: {repr(response)}")
             # logging(f"Info: {repr(info)}")

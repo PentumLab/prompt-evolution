@@ -9,6 +9,7 @@ import json
 load_dotenv()
 
 MAX_TOKENS = 16384
+MAX_META_TOKENS = 4000
 
 CLAUDE_MODEL = "anthropic/claude-sonnet-4-5-20250929"
 CLAUDE_HAIKU_MODEL = "anthropic/claude-3-haiku-20240307"
@@ -24,6 +25,8 @@ OPENAI_GPT5MINI_MODEL = "openai/gpt-5-mini"
 GEMINI_3_MODEL = "gemini/gemini-3-pro-preview"
 GEMINI_MODEL = "gemini/gemini-2.5-pro"
 GEMINI_FLASH_MODEL = "gemini/gemini-2.5-flash"
+GEMMA_MODEL = "hosted_vllm/gemma-4"
+CLAUDE_HAIKU_45_MODEL = "anthropic/claude-haiku-4-5-20251001"
 
 litellm.drop_params=True
 
