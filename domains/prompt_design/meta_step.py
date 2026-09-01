@@ -2,8 +2,10 @@ import argparse
 import json
 from pathlib import Path
 
-from agent.llm import CLAUDE_HAIKU_45_MODEL, MAX_META_TOKENS
+from agent.config import get_configured_model
+from agent.llm import CLAUDE_HAIKU_45_MODEL
 from agent.llm_withtools import chat_with_agent
+from agent.usage import usage_context
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -95,7 +97,9 @@ def main():
         / "report.json"
     )
 
-    report = json.loads(report_file.read_text(encoding="utf-8"))
+    report = json.loads(
+        report_file.read_text(encoding="utf-8")
+    )
 
     instruction = build_instruction(
         report=report,
@@ -103,13 +107,20 @@ def main():
         scope=args.scope,
     )
 
-    chat_with_agent(
-        msg=instruction,
-        model=CLAUDE_HAIKU_45_MODEL,
-        tools_available="all",
-        max_tool_calls=20,
-        max_tokens=MAX_META_TOKENS,
-    )
+    with usage_context(
+        agent_role="meta_agent",
+        metadata={
+            "domain": "prompt_design",
+            "generation": args.generation,
+            "scope": args.scope,
+        },
+    ):
+        chat_with_agent(
+            msg=instruction,
+            model=get_configured_model("meta_agent", CLAUDE_HAIKU_45_MODEL),
+            tools_available="all",
+            max_tool_calls=20,
+        )
 
 
 if __name__ == "__main__":

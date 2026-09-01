@@ -5,6 +5,12 @@ import requests
 import litellm
 from dotenv import load_dotenv
 import json
+from agent.config import (
+    get_configured_model,
+    get_hosted_vllm_api_base,
+    get_max_output_tokens,
+)
+from agent.usage import check_token_budget, log_usage
 
 load_dotenv()
 
@@ -25,8 +31,9 @@ OPENAI_GPT5MINI_MODEL = "openai/gpt-5-mini"
 GEMINI_3_MODEL = "gemini/gemini-3-pro-preview"
 GEMINI_MODEL = "gemini/gemini-2.5-pro"
 GEMINI_FLASH_MODEL = "gemini/gemini-2.5-flash"
-GEMMA_MODEL = "hosted_vllm/gemma-4"
-CLAUDE_HAIKU_45_MODEL = "anthropic/claude-haiku-4-5-20251001"
+GEMMA_MODEL = get_configured_model("prompt_design_task_agent", "hosted_vllm/gemma-4")
+CLAUDE_HAIKU_45_MODEL = get_configured_model("meta_agent", "anthropic/claude-haiku-4-5-20251001")
+
 
 litellm.drop_params=True
 
@@ -40,11 +47,14 @@ def get_response_from_llm(
     msg: str,
     model: str = OPENAI_MODEL,
     temperature: float = 0.0,
-    max_tokens: int = MAX_TOKENS,
+    max_tokens: int = None,
     msg_history=None,
+    system_prompt: str = None,
 ) -> Tuple[str, list, dict]:
     if msg_history is None:
         msg_history = []
+    if max_tokens is None:
+        max_tokens = get_max_output_tokens(MAX_TOKENS)
 
     # Convert text to content, compatible with LITELLM API
     msg_history = [
@@ -52,13 +62,29 @@ def get_response_from_llm(
         for msg in msg_history
     ]
 
-    new_msg_history = msg_history + [{"role": "user", "content": msg}]
+    #new_msg_history = msg_history + [{"role": "user", "content": msg}]
+    new_msg_history = []
+
+    if system_prompt:
+        new_msg_history.append(
+            {"role": "system", "content": system_prompt}
+        )
+
+    new_msg_history += msg_history
+    new_msg_history.append(
+        {"role": "user", "content": msg}
+    )
 
     # Build kwargs - handle model-specific requirements
     completion_kwargs = {
         "model": model,
         "messages": new_msg_history,
     }
+
+    if model.startswith("hosted_vllm/"):
+        api_base = get_hosted_vllm_api_base()
+        if api_base:
+            completion_kwargs["api_base"] = api_base
 
     # GPT-5 and GPT-5-mini only support default temperature (1), skip it
     # GPT-5.2 supports temperature
@@ -77,8 +103,15 @@ def get_response_from_llm(
         else:
             completion_kwargs["max_tokens"] = max_tokens
 
+    check_token_budget(model)
     response = litellm.completion(**completion_kwargs)
     response_text = response['choices'][0]['message']['content']  # pyright: ignore
+    usage_info = log_usage(
+        response,
+        model=model,
+        input_messages=completion_kwargs["messages"],
+        output_text=response_text,
+    )
     new_msg_history.append({"role": "assistant", "content": response['choices'][0]['message']['content']})
 
     # Convert content to text, compatible with MetaGen API
@@ -87,7 +120,7 @@ def get_response_from_llm(
         for msg in new_msg_history
     ]
 
-    return response_text, new_msg_history, {}
+    return response_text, new_msg_history, {"usage": usage_info}
 
 
 if __name__ == "__main__":

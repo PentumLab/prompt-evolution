@@ -1,0 +1,21 @@
+{
+  "models": {
+    "meta_agent": "anthropic/claude-haiku-4-5-20251001",
+    "task_agent": "hosted_vllm/gemma-4",
+    "prompt_design_task_agent": "hosted_vllm/gemma-4"
+  },
+  "defaults": {
+    "max_output_tokens": 16384
+  },
+  "usage": {
+    "log_filename": "llm_usage.jsonl",
+    "log_path": null
+  },
+  "providers": {
+    "hosted_vllm_api_base": "http://127.0.0.1:8000/v1"
+  },
+  "model_token_limits": {
+    "anthropic/claude-haiku-4-5-20251001": 150000,
+    "hosted_vllm/gemma-4": "UNLIMITED"
+  }
+}

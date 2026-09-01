@@ -1,10 +1,12 @@
 import argparse
 from pathlib import Path
 
+from agent.usage import usage_context
 from prompt_design_agent import generate_prompt
 
 
 BASE_DIR = Path(__file__).parent
+ROOT_DIR = Path(__file__).resolve().parents[2]
 TASK_FILE = BASE_DIR / "task.md"
 
 
@@ -15,10 +17,19 @@ def main():
 
     task = TASK_FILE.read_text(encoding="utf-8")
 
-    response = generate_prompt(task)
+    with usage_context(
+        metadata={
+            "domain": "prompt_design",
+            "generation": args.generation,
+        }
+    ):
+        response = generate_prompt(task)
 
-    output_dir = Path(
-        f"outputs/prompt_design/gen_{args.generation:03d}"
+    output_dir = (
+        ROOT_DIR
+        / "outputs"
+        / "prompt_design"
+        / f"gen_{args.generation:03d}"
     )
     output_file = output_dir / "candidate_prompt.txt"
 

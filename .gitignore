@@ -13,3 +13,7 @@ prompt_design_usage.json
 # Python cache
 __pycache__/
 *.py[cod]
+
+# Config files
+hyperagent_config.json
+**/hyperagent_config.json
