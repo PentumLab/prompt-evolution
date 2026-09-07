@@ -93,6 +93,7 @@ Die ursprüngliche HyperAgents-Dokumentation mit zusätzlicher Setup- und Docker
 
 ```bash
 cp .env.example .env
+cp hyperagent_config.example.json hyperagent_config.json
 ```
 
 Für den aktuellen Meta-Agenten wird ein Anthropic API-Key benötigt:
@@ -106,6 +107,55 @@ Die mitgelieferte `.env.example` enthält außerdem einen lokalen OpenAI-kompati
 ```text
 HOSTED_VLLM_API_BASE=http://127.0.0.1:8000/v1
 ```
+
+`hyperagent_config.json` ist die lokale, nicht eingecheckte Runtime-Konfiguration.
+Dort werden Modelle, per-call Output-Limits, kumulative Token-Limits und der
+Usage-Log-Pfad gesetzt. Das Repository enthält nur
+`hyperagent_config.example.json` als sichere Vorlage.
+
+Wichtige Felder:
+
+```json
+{
+  "models": {
+    "meta_agent": "anthropic/claude-haiku-4-5-20251001",
+    "task_agent": "hosted_vllm/gemma-4",
+    "prompt_design_task_agent": "hosted_vllm/gemma-4"
+  },
+  "defaults": {
+    "max_output_tokens": 16384,
+    "max_tool_calls": 40
+  },
+  "agent_max_output_tokens": {
+    "meta_agent": 4000,
+    "task_agent": "DEFAULT",
+    "prompt_design_task_agent": 8000
+  },
+  "agent_max_tool_calls": {
+    "meta_agent": 20
+  },
+  "usage": {
+    "log_filename": "llm_usage.jsonl",
+    "log_path": null
+  },
+  "model_token_limits": {
+    "anthropic/claude-haiku-4-5-20251001": 150000,
+    "hosted_vllm/gemma-4": "UNLIMITED"
+  }
+}
+```
+
+`agent_max_output_tokens` begrenzt die Output-Tokens pro LLM-Aufruf.
+`agent_max_tool_calls` begrenzt die Tool-Aufrufe pro Agent-Lauf.
+`model_token_limits` begrenzt den kumulierten Tokenverbrauch pro Modell anhand
+des Usage-Logs.
+
+Für `agent_max_output_tokens`, `model_max_output_tokens` und
+`agent_max_tool_calls` gelten:
+
+- Zahl: genau dieses Limit verwenden
+- `"DEFAULT"` oder `null`: den passenden Wert aus `defaults` verwenden
+- `"UNLIMITED"` oder `-1`: kein entsprechendes Limit setzen
 
 ### 4. Task-Agent-Modell bereitstellen
 
@@ -130,6 +180,15 @@ outputs/prompt_design/gen_000/candidate_prompt.txt
 ```
 
 Damit entsteht die Ausgangsgeneration aus der eingecheckten, noch nicht evolvierten Prompt-Generierungsstrategie.
+
+Den aktuellen Zustand der Generationen kannst du jederzeit prüfen:
+
+```bash
+PYTHONPATH=. python domains/prompt_design/state.py status
+```
+
+Die Ausgabe zeigt pro Generation Score, Parent, Snapshot-Status und ob die
+Generation als Parent für weitere Evolutionsschritte auswählbar ist.
 
 ### 6. Generation bewerten
 
@@ -184,6 +243,7 @@ Dieser Report dient als Feedback für den Meta-Agenten.
 ```bash
 PYTHONPATH=. python domains/prompt_design/meta_step.py \
   --generation 0 \
+  --target-generation 1 \
   --scope prompt
 ```
 
@@ -197,17 +257,51 @@ erhalten.
 
 Der Task-Agent verwendet weiterhin einen einzelnen Modellaufruf. Der Meta-Agent optimiert die Strategie, mit der der eigentliche System-Prompt erzeugt wird.
 
-#### Full Evolution
+Der frühere `full`-Scope ist in der schlanken Prompt-Evolution-Mini-Loop noch
+nicht aktiviert, weil dieser Ablauf aktuell nur `prompt_design_agent.py` sauber
+snapshotet und patcht.
+
+Der Meta-Step erstellt oder aktualisiert:
+
+```text
+outputs/prompt_design/gen_001/prompt_design_agent.py
+outputs/prompt_design/gen_001/model_patch.diff
+outputs/prompt_design/gen_001/meta_agent_chat_history.md
+outputs/prompt_design/gen_001/meta_workspace/
+outputs/prompt_design/gen_001/metadata.json
+```
+
+Am Ende des Meta-Steps läuft automatisch eine Validierung. Sie prüft, ob ein
+kompilierbarer Agent-Snapshot existiert, ob sich `prompt_design_agent.py`
+gegenüber dem Parent wirklich geändert hat und ob `model_patch.diff` nicht leer
+ist. Fehlgeschlagene Läufe werden in `metadata.json` als `failed` markiert und
+nicht als auswählbarer Parent verwendet.
+
+Eine Generation kann auch manuell geprüft werden:
+
+```bash
+PYTHONPATH=. python domains/prompt_design/state.py validate --generation 1
+```
+
+Wenn ein Lauf wegen eines Tokenlimits abbricht, wird ein Resume-State
+gespeichert:
+
+```text
+outputs/prompt_design/gen_001/meta_agent_resume_state.json
+```
+
+Nach Anpassung des Limits kann derselbe Lauf fortgesetzt werden:
 
 ```bash
 PYTHONPATH=. python domains/prompt_design/meta_step.py \
   --generation 0 \
-  --scope full
+  --target-generation 1 \
+  --scope prompt \
+  --resume
 ```
 
-Im Modus `full` darf der Meta-Agent relevante Teile der Agentenimplementierung und des Workflows verändern, sofern der Experimentablauf funktionsfähig bleibt.
-
-Evaluationsdaten und die aktuelle Task-Definition dürfen dabei nicht verändert werden.
+Beim Resume wird der Parent nicht erneut restored und der bestehende Chatlog
+nicht gelöscht.
 
 ### 9. Nächste Generation erzeugen
 
@@ -244,6 +338,67 @@ Meta-Agent verändert die Implementierung
 Generation 1
 ```
 
+## Parent-Auswahl und Restore
+
+Der nächste Evolutionsschritt kann explizit von einer bestimmten Generation
+starten:
+
+```bash
+PYTHONPATH=. python domains/prompt_design/meta_step.py \
+  --generation 7 \
+  --target-generation 9 \
+  --scope prompt
+```
+
+Alternativ kann der Parent automatisch gewählt werden:
+
+```bash
+PYTHONPATH=. python domains/prompt_design/meta_step.py \
+  --parent-selection best \
+  --target-generation 9 \
+  --scope prompt
+```
+
+Verfügbare Auswahlmethoden:
+
+```text
+best
+latest
+random
+score_prop
+score_child_prop
+```
+
+Eine gespeicherte Generation kann in den Arbeitsbaum zurückkopiert werden:
+
+```bash
+PYTHONPATH=. python domains/prompt_design/state.py restore --generation 7
+```
+
+Das überschreibt `prompt_design_agent.py` mit dem Snapshot aus der gewählten
+Generation.
+
+## Typischer Zyklus
+
+```bash
+# 1. Candidate Prompt erzeugen
+PYTHONPATH=. python domains/prompt_design/harness.py --generation 0
+
+# 2. outputs/prompt_design/gen_000/manual_evaluation.json anlegen
+
+# 3. Bewertung validieren
+PYTHONPATH=. python domains/prompt_design/manual_evaluator.py --generation 0
+
+# 4. Aus bestem Parent neue Generation erzeugen
+PYTHONPATH=. python domains/prompt_design/meta_step.py --parent-selection best --scope prompt
+
+# 5. Candidate Prompt der neuen Generation erzeugen
+PYTHONPATH=. python domains/prompt_design/harness.py --generation 1
+```
+
+Danach wird die neue Generation wieder bewertet und als Feedback für den
+nächsten Meta-Schritt verwendet.
+
 ## Evolutionsmodi
 
 ### `prompt`
@@ -252,13 +407,9 @@ Der konservative Modus.
 
 Der Meta-Agent optimiert die Prompt-Generierungsstrategie, während die zentrale `generate_prompt(task: str) -> str`-Schnittstelle und der einzelne Task-Agent-Modellaufruf erhalten bleiben.
 
-### `full`
-
-Dieser Modus behält die weitergehende HyperAgents-Idee bei.
-
-Der Meta-Agent darf relevante Teile des Agenten-Codes und des Workflows verändern. Dadurch kann nicht nur der Text eines Prompts, sondern auch die Strategie zur Prompt-Erzeugung beziehungsweise der Agentenablauf selbst verändert werden.
-
-Die aktuelle `task.md` bleibt in beiden Modi geschützt.
+Ein späterer `full`-Modus müsste mehrere Dateien als Snapshot oder Git-Patch
+verwalten. Für diesen offenen Modus ist weiterhin die ursprüngliche
+HyperAgents-`generate_loop.py` die passendere Grundlage.
 
 ## Aktueller Modellaufbau
 
@@ -267,7 +418,8 @@ Task-Agent:  hosted_vllm/gemma-4
 Meta-Agent:  anthropic/claude-haiku-4-5-20251001
 ```
 
-Für den Meta-Agenten ist in `agent/llm.py` ein separates maximales Output-Budget definiert.
+Modelle, per-call Output-Limits und kumulative Token-Limits werden in
+`hyperagent_config.json` konfiguriert.
 
 ## Output-Struktur
 
@@ -276,14 +428,22 @@ Ein Lauf erzeugt beispielsweise:
 ```text
 outputs/
 └── prompt_design/
+    ├── archive.jsonl
     ├── gen_000/
+    │   ├── prompt_design_agent.py
     │   ├── candidate_prompt.txt
     │   ├── manual_evaluation.json
-    │   └── report.json
+    │   ├── report.json
+    │   └── metadata.json
     └── gen_001/
+        ├── prompt_design_agent.py
+        ├── model_patch.diff
+        ├── meta_agent_chat_history.md
+        ├── meta_workspace/
         ├── candidate_prompt.txt
         ├── manual_evaluation.json
-        └── report.json
+        ├── report.json
+        └── metadata.json
 ```
 
 Diese Dateien sind Experiment-Artefakte und werden nicht in Git eingecheckt.
@@ -312,6 +472,9 @@ domains/prompt_design/
     meta_step.py
         führt den Meta-Agenten mit Evaluation und Evolutionsmodus aus
 
+    state.py
+        verwaltet Snapshots, Parent-Auswahl, Restore, Validierung und archive.jsonl
+
 prompt_design_agent.py
     initialer Prompt-Generator für Generation 0
 
@@ -328,7 +491,9 @@ NOTICE.md
 
 ## Sicherheit
 
-Der Meta-Agent kann insbesondere im Modus `full` Dateien und Code verändern.
+Der Meta-Agent kann Dateien und Code verändern. In der aktuellen
+Prompt-Evolution-Mini-Loop ist dieser Schreibpfad auf `prompt_design_agent.py`
+und den jeweiligen `meta_workspace` ausgerichtet.
 
 Damit gilt dieselbe grundlegende Sicherheitsproblematik wie bei HyperAgents: modellgenerierter Code sollte als nicht vertrauenswürdig behandelt werden.
 

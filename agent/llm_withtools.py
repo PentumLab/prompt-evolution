@@ -1,7 +1,8 @@
 import re
 import json
+from pathlib import Path
 
-from agent.llm import get_response_from_llm
+from agent.llm import USE_CONFIG_MAX_TOKENS, get_response_from_llm
 from agent.tools import load_tools
 
 def get_tooluse_prompt(tool_infos=[]):
@@ -29,17 +30,26 @@ Use only one tool (if needed) in this format:
 
 ONLY USE ONE TOOL PER RESPONSE, AND STRICTLY FOLLOW THE FORMAT OF TOOL_NAME AND TOOL_INPUT ABOVE.
 DO NOT HALLUCINATE OR MAKE UP ANYTHING.
+Do not use <function_calls>, <invoke_tool>, XML tool calls, or any other
+tool-call syntax.
 """.format(tools_available=tools_available)
     return tooluse_prompt.strip()
 
-def should_retry_tool_use(response, tool_uses=None):
+def get_tool_retry_message(response, tool_uses=None):
     """
-    Check if the response attempts to use a tool,
-    but ran out of output context.
+    Return a corrective message if the response appears to attempt tool use
+    but no executable tool call could be parsed.
     """
-    # If there are tool uses, we don't need to check for retry
     if tool_uses is not None and len(tool_uses) > 0:
-        return False
+        return None
+
+    if "<function_calls>" in response or "<invoke_tool>" in response:
+        return (
+            "Error: Invalid tool-call syntax. Use exactly one tool call in this "
+            "format only: <json>{\"tool_name\": \"...\", "
+            "\"tool_input\": {...}}</json>. Do not use <function_calls> or "
+            "<invoke_tool>."
+        )
 
     # Find positions of the markers
     json_pos = response.find("<json>")
@@ -54,16 +64,65 @@ def should_retry_tool_use(response, tool_uses=None):
         and json_pos < tool_name_pos < tool_input_pos
         and len(response) >= 2000
     ):
-        return True
+        return (
+            "Error: Tool call appears incomplete or malformed. Retry with exactly "
+            "one complete <json> block containing tool_name and tool_input."
+        )
 
-    # No retry
-    return False
+    return None
 
-def check_for_tool_uses(response):
-    """
-    Checks if the response contains one or more tool calls in json code blocks.
-    Returns a list of tool use dictionaries.
-    """
+def _first_json_object(text):
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for index in range(start, len(text)):
+        char = text[index]
+        if escape:
+            escape = False
+            continue
+        if char == "\\":
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return None
+
+
+def _load_tool_input(value):
+    value = str(value or "").strip()
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        json_text = _first_json_object(value)
+        if not json_text:
+            raise
+        return json.loads(json_text)
+
+
+def _extract_parameter(block, name):
+    match = re.search(
+        rf'<parameter\s+name=["\']{re.escape(name)}["\']\s*>(.*?)(?:</parameter>|$)',
+        block,
+        re.DOTALL,
+    )
+    return match.group(1).strip() if match else None
+
+
+def _extract_json_tool_uses(response):
     pattern = r'<json>\s*(\{.*?\})\s*</json>'
     matches = re.findall(pattern, response, re.DOTALL)
     tool_uses = []
@@ -77,6 +136,103 @@ def check_for_tool_uses(response):
         except json.JSONDecodeError:
             continue  # Skip malformed JSON blocks
 
+    return tool_uses
+
+
+def _extract_loose_json_tool_uses(response):
+    tool_uses = []
+    marker = "<json>"
+    position = 0
+
+    while True:
+        start = response.find(marker, position)
+        if start == -1:
+            break
+
+        position = start + len(marker)
+        json_text = _first_json_object(response[position:])
+        if not json_text:
+            continue
+
+        try:
+            tool_use = json.loads(json_text)
+            if 'tool_name' not in tool_use or 'tool_input' not in tool_use:
+                continue
+            tool_uses.append(tool_use)
+        except json.JSONDecodeError:
+            continue
+
+    return tool_uses
+
+
+def _extract_invoke_tool_uses(response):
+    invoke_blocks = re.findall(
+        r'<invoke_tool>\s*(.*?)\s*</invoke_tool>',
+        response,
+        re.DOTALL,
+    )
+    tool_uses = []
+
+    for block in invoke_blocks:
+        tool_name = _extract_parameter(block, "tool_name")
+        tool_input = _extract_parameter(block, "tool_input")
+
+        if not tool_name or not tool_input:
+            continue
+
+        try:
+            tool_uses.append(
+                {
+                    "tool_name": tool_name,
+                    "tool_input": _load_tool_input(tool_input),
+                }
+            )
+        except json.JSONDecodeError:
+            continue
+
+    return tool_uses
+
+
+def _extract_function_call_tool_uses(response):
+    function_blocks = re.findall(
+        r'<function_calls>\s*(.*?)\s*</function_calls>',
+        response,
+        re.DOTALL,
+    )
+    tool_uses = []
+
+    for block in function_blocks:
+        tool_name = _extract_parameter(block, "tool_name")
+        tool_input = _extract_parameter(block, "tool_input")
+
+        if not tool_name or not tool_input:
+            continue
+
+        try:
+            tool_uses.append(
+                {
+                    "tool_name": tool_name,
+                    "tool_input": _load_tool_input(tool_input),
+                }
+            )
+        except json.JSONDecodeError:
+            continue
+
+    return tool_uses
+
+
+def check_for_tool_uses(response):
+    """
+    Checks if the response contains one or more tool calls.
+    Returns a list of tool use dictionaries.
+    """
+    tool_uses = _extract_json_tool_uses(response)
+    if not tool_uses:
+        tool_uses = _extract_loose_json_tool_uses(response)
+    if not tool_uses:
+        tool_uses = _extract_invoke_tool_uses(response)
+    if not tool_uses:
+        tool_uses = _extract_function_call_tool_uses(response)
     return tool_uses if tool_uses else None
 
 def process_tool_call(tools_dict, tool_name, tool_input):
@@ -88,6 +244,21 @@ def process_tool_call(tools_dict, tool_name, tool_input):
     except Exception as e:
         return f"Error executing tool '{tool_name}': {str(e)}"
 
+
+def _save_resume_state(path, **state):
+    if not path:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _load_resume_state(path):
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Resume state not found: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
 def chat_with_agent(
     msg,
     model="claude-4-sonnet-genai",
@@ -96,7 +267,9 @@ def chat_with_agent(
     tools_available=[],  # Empty list means no tools, 'all' means all tools
     multiple_tool_calls=False,  # Whether to allow multiple tool calls in a single response
     max_tool_calls=40,  # Maximum number of tool calls allowed in a single response, -1 for unlimited
-    max_tokens=None,
+    max_tokens=USE_CONFIG_MAX_TOKENS,
+    resume_state_file=None,
+    resume=False,
 ):
     get_response_fn = get_response_from_llm
     # Construct message
@@ -110,22 +283,55 @@ def chat_with_agent(
         tools_dict = {tool['info']['name']: tool for tool in all_tools}
         system_msg = f"{get_tooluse_prompt([tool['info'] for tool in all_tools])}\n\n"
         num_tool_calls = 0
+        pending_msg = system_msg + msg
+        response = None
+
+        if resume:
+            state = _load_resume_state(resume_state_file)
+            new_msg_history = state.get("msg_history", new_msg_history)
+            num_tool_calls = state.get("num_tool_calls", 0)
+            if state.get("complete"):
+                logging(f"Resume state is already complete: {resume_state_file}")
+                return new_msg_history
+            pending_msg = state.get("pending_msg")
+            response = None if pending_msg else state.get("last_response")
+            if pending_msg is None and response is None:
+                pending_msg = system_msg + msg
+            logging(f"Resuming from: {resume_state_file}")
 
         # Call API
-        logging(f"Input: {repr(msg)}")
-        response, new_msg_history, info = get_response_fn(
-            msg=system_msg + msg,
-            model=model,
-            msg_history=new_msg_history,
-            max_tokens=max_tokens,
-        )
-        logging(f"Output: {repr(response)}")
+        if response is None:
+            logging(f"Input: {repr(msg)}")
+            _save_resume_state(
+                resume_state_file,
+                msg_history=new_msg_history,
+                pending_msg=pending_msg,
+                num_tool_calls=num_tool_calls,
+                complete=False,
+            )
+            response, new_msg_history, info = get_response_fn(
+                msg=pending_msg,
+                model=model,
+                msg_history=new_msg_history,
+                max_tokens=max_tokens,
+            )
+            logging(f"Output: {repr(response)}")
+            _save_resume_state(
+                resume_state_file,
+                msg_history=new_msg_history,
+                pending_msg=None,
+                num_tool_calls=num_tool_calls,
+                last_response=response,
+                complete=False,
+            )
+        else:
+            logging("Continuing from last saved model response.")
         # logging(f"Info: {repr(info)}")
 
         # Tool use
         tool_uses = check_for_tool_uses(response)
-        retry_tool_use = should_retry_tool_use(response, tool_uses)
-        while tool_uses or retry_tool_use:
+        tool_retry_message = get_tool_retry_message(response, tool_uses)
+        while tool_uses or tool_retry_message:
             # Check for max tool calls
             if max_tool_calls > 0 and num_tool_calls >= max_tool_calls:
                 logging("Error: Maximum number of tool calls reached.")
@@ -152,28 +358,52 @@ def chat_with_agent(
                     tool_msgs.append(tool_msg)
 
             # Check for retry
-            if retry_tool_use:
-                logging("Error: Output context exceeded. Please try again.")
-                tool_msgs.append("Error: Output context exceeded. Please try again.")
+            if tool_retry_message:
+                logging(tool_retry_message)
+                tool_msgs.append(tool_retry_message)
+                num_tool_calls += 1
 
             # Get tool response
+            pending_msg = system_msg + '\n\n'.join(tool_msgs)
+            _save_resume_state(
+                resume_state_file,
+                msg_history=new_msg_history,
+                pending_msg=pending_msg,
+                num_tool_calls=num_tool_calls,
+                complete=False,
+            )
             response, new_msg_history, info = get_response_fn(
-                msg=system_msg + '\n\n'.join(tool_msgs),
+                msg=pending_msg,
                 model=model,
                 msg_history=new_msg_history,
                 max_tokens=max_tokens,
             )
             logging(f"Output: {repr(response)}")
+            _save_resume_state(
+                resume_state_file,
+                msg_history=new_msg_history,
+                pending_msg=None,
+                num_tool_calls=num_tool_calls,
+                last_response=response,
+                complete=False,
+            )
             # logging(f"Info: {repr(info)}")
 
             # Check for next tool use
             tool_uses = check_for_tool_uses(response)
-            retry_tool_use = should_retry_tool_use(response, tool_uses)
+            tool_retry_message = get_tool_retry_message(response, tool_uses)
 
     except Exception as e:
         logging(f"Error: {str(e)}")
         raise e
 
+    _save_resume_state(
+        resume_state_file,
+        msg_history=new_msg_history,
+        pending_msg=None,
+        num_tool_calls=num_tool_calls,
+        complete=True,
+    )
     return new_msg_history
 
 if __name__ == "__main__":

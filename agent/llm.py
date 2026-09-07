@@ -9,13 +9,13 @@ from agent.config import (
     get_configured_model,
     get_hosted_vllm_api_base,
     get_max_output_tokens,
+    get_model_max_output_tokens,
 )
 from agent.usage import check_token_budget, log_usage
 
 load_dotenv()
 
-MAX_TOKENS = 16384
-MAX_META_TOKENS = 4000
+USE_CONFIG_MAX_TOKENS = object()
 
 CLAUDE_MODEL = "anthropic/claude-sonnet-4-5-20250929"
 CLAUDE_HAIKU_MODEL = "anthropic/claude-3-haiku-20240307"
@@ -47,14 +47,20 @@ def get_response_from_llm(
     msg: str,
     model: str = OPENAI_MODEL,
     temperature: float = 0.0,
-    max_tokens: int = None,
+    max_tokens=USE_CONFIG_MAX_TOKENS,
     msg_history=None,
     system_prompt: str = None,
 ) -> Tuple[str, list, dict]:
     if msg_history is None:
         msg_history = []
-    if max_tokens is None:
-        max_tokens = get_max_output_tokens(MAX_TOKENS)
+    if max_tokens is USE_CONFIG_MAX_TOKENS:
+        max_tokens = get_max_output_tokens()
+    model_max_output_tokens = get_model_max_output_tokens(model)
+    if model_max_output_tokens is not None:
+        if max_tokens is None:
+            max_tokens = model_max_output_tokens
+        else:
+            max_tokens = min(max_tokens, model_max_output_tokens)
 
     # Convert text to content, compatible with LITELLM API
     msg_history = [
@@ -94,12 +100,9 @@ def get_response_from_llm(
         completion_kwargs["temperature"] = temperature
 
     # GPT-5 models require max_completion_tokens instead of max_tokens
-    if "gpt-5" in model:
-        completion_kwargs["max_completion_tokens"] = max_tokens
-    else:
-        # Claude Haiku has a 4096 token limit
-        if "claude-3-haiku" in model:
-            completion_kwargs["max_tokens"] = min(max_tokens, 4096)
+    if max_tokens is not None:
+        if "gpt-5" in model:
+            completion_kwargs["max_completion_tokens"] = max_tokens
         else:
             completion_kwargs["max_tokens"] = max_tokens
 

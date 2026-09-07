@@ -4,6 +4,7 @@ import importlib
 def load_tools(logging=print, names=[]):
     tools_dir = Path(__file__).parent
     tools = []
+    requested_names = set(names) if isinstance(names, (list, tuple, set)) else names
 
     # Get all Python files in the tools directory (excluding __init__.py)
     tool_files = [f for f in tools_dir.glob("*.py") if f.stem != "__init__"]
@@ -16,10 +17,16 @@ def load_tools(logging=print, names=[]):
 
             # Check if module has required functions
             if hasattr(module, 'tool_info') and hasattr(module, 'tool_function'):
-                tool_name = tool_file.stem
-                if names and (names == 'all' or tool_name in names):
+                module_name = tool_file.stem
+                info = module.tool_info()
+                tool_name = info.get("name", module_name)
+                if requested_names and (
+                    requested_names == 'all'
+                    or module_name in requested_names
+                    or tool_name in requested_names
+                ):
                     tools.append({
-                        'info': module.tool_info(),
+                        'info': info,
                         'function': module.tool_function,
                         'name': tool_name,
                     })

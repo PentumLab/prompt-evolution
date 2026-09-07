@@ -1,4 +1,5 @@
 from agent.base_agent import AgentSystem
+from agent.config import get_agent_max_output_tokens
 from agent.llm_withtools import chat_with_agent
 from utils.common import extract_jsons
 
@@ -29,7 +30,13 @@ Respond in JSON format with the following schema:
     "response": ...
 }}
 </json>"""
-        new_msg_history = chat_with_agent(instruction, model=self.model, msg_history=[], logging=self.log)
+        new_msg_history = chat_with_agent(
+            instruction,
+            model=self.model,
+            msg_history=[],
+            logging=self.log,
+            max_tokens=get_agent_max_output_tokens("task_agent"),
+        )
 
         # Extract the response
         prediction = "None"

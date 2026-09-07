@@ -1,9 +1,17 @@
 import argparse
 import json
+import sys
 from pathlib import Path
 
-
 ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from domains.prompt_design.evolution_state import (
+    rebuild_archive,
+    save_metadata,
+    snapshot_path,
+)
 
 
 def main():
@@ -68,6 +76,16 @@ def main():
         json.dumps(report, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    save_metadata(
+        args.generation,
+        {
+            "report": str(report_file),
+            "score": report["score"],
+            "overall_score": report["overall_score"],
+            "valid_parent": snapshot_path(args.generation).exists(),
+        },
+    )
+    rebuild_archive()
 
     print(f"Report written to: {report_file}")
     print(f"Overall score: {report['overall_score']}")

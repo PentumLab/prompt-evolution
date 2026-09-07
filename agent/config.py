@@ -6,6 +6,8 @@ from pathlib import Path
 
 CONFIG_FILENAME = "hyperagent_config.json"
 UNLIMITED_VALUES = {"-1", "unlimited", "none", "off", "false", "no"}
+DEFAULT_VALUES = {"default", "inherit"}
+USE_DEFAULT_LIMIT = object()
 
 
 def _unique_paths(paths):
@@ -68,6 +70,82 @@ def parse_optional_limit(value, name="limit"):
     return limit
 
 
+def parse_output_token_limit(value, name="limit", allow_default=False):
+    if value in (None, ""):
+        if allow_default:
+            return USE_DEFAULT_LIMIT
+        raise ValueError(f"{name} must be configured")
+
+    text = str(value).strip()
+    if not text:
+        if allow_default:
+            return USE_DEFAULT_LIMIT
+        raise ValueError(f"{name} must be configured")
+
+    lowered = text.lower()
+    if lowered in DEFAULT_VALUES:
+        if allow_default:
+            return USE_DEFAULT_LIMIT
+        raise ValueError(f"{name} cannot use DEFAULT here")
+    if lowered in UNLIMITED_VALUES:
+        return None
+
+    try:
+        limit = int(text)
+    except ValueError:
+        raise ValueError(
+            f"{name} must be an integer, DEFAULT, or UNLIMITED, got {value!r}"
+        )
+    if limit < 0:
+        return None
+    return limit
+
+
+def parse_tool_call_limit(value, name="limit", allow_default=False):
+    if value in (None, ""):
+        if allow_default:
+            return USE_DEFAULT_LIMIT
+        raise ValueError(f"{name} must be configured")
+
+    text = str(value).strip()
+    if not text:
+        if allow_default:
+            return USE_DEFAULT_LIMIT
+        raise ValueError(f"{name} must be configured")
+
+    lowered = text.lower()
+    if lowered in DEFAULT_VALUES:
+        if allow_default:
+            return USE_DEFAULT_LIMIT
+        raise ValueError(f"{name} cannot use DEFAULT here")
+    if lowered in UNLIMITED_VALUES:
+        return -1
+
+    try:
+        limit = int(text)
+    except ValueError:
+        raise ValueError(
+            f"{name} must be an integer, DEFAULT, or UNLIMITED, got {value!r}"
+        )
+    if limit < 0:
+        return -1
+    return limit
+
+
+def _normalize_model(model):
+    return str(model or "").strip().lower()
+
+
+def _model_matches(model, pattern):
+    model = _normalize_model(model)
+    pattern = _normalize_model(pattern)
+    if not pattern:
+        return False
+    if pattern.endswith("*"):
+        return model.startswith(pattern[:-1])
+    return model == pattern or pattern in model
+
+
 def get_configured_model(key, default):
     models = load_hyperagent_config().get("models", {})
     if not isinstance(models, dict):
@@ -75,7 +153,7 @@ def get_configured_model(key, default):
     return models.get(key, default)
 
 
-def get_max_output_tokens(default):
+def get_max_output_tokens():
     config = load_hyperagent_config()
     defaults = config.get("defaults", {})
     value = None
@@ -83,8 +161,60 @@ def get_max_output_tokens(default):
         value = defaults.get("max_output_tokens")
     if value is None:
         value = config.get("max_output_tokens")
-    limit = parse_optional_limit(value, "defaults.max_output_tokens")
-    return default if limit is None else limit
+    return parse_output_token_limit(value, "defaults.max_output_tokens")
+
+
+def get_max_tool_calls():
+    config = load_hyperagent_config()
+    defaults = config.get("defaults", {})
+    value = None
+    if isinstance(defaults, dict):
+        value = defaults.get("max_tool_calls")
+    if value is None:
+        value = config.get("max_tool_calls")
+    return parse_tool_call_limit(value, "defaults.max_tool_calls")
+
+
+def get_agent_max_output_tokens(agent_key):
+    config = load_hyperagent_config()
+    agent_limits = config.get("agent_max_output_tokens", {})
+    if isinstance(agent_limits, dict) and agent_key in agent_limits:
+        limit = parse_output_token_limit(
+            agent_limits.get(agent_key),
+            f"agent_max_output_tokens[{agent_key}]",
+            allow_default=True,
+        )
+        return get_max_output_tokens() if limit is USE_DEFAULT_LIMIT else limit
+    return get_max_output_tokens()
+
+
+def get_agent_max_tool_calls(agent_key):
+    config = load_hyperagent_config()
+    agent_limits = config.get("agent_max_tool_calls", {})
+    if isinstance(agent_limits, dict) and agent_key in agent_limits:
+        limit = parse_tool_call_limit(
+            agent_limits.get(agent_key),
+            f"agent_max_tool_calls[{agent_key}]",
+            allow_default=True,
+        )
+        return get_max_tool_calls() if limit is USE_DEFAULT_LIMIT else limit
+    return get_max_tool_calls()
+
+
+def get_model_max_output_tokens(model):
+    limits = load_hyperagent_config().get("model_max_output_tokens", {})
+    if not isinstance(limits, dict):
+        return None
+
+    for pattern, raw_limit in limits.items():
+        if _model_matches(model, pattern):
+            limit = parse_output_token_limit(
+                raw_limit,
+                f"model_max_output_tokens[{pattern}]",
+                allow_default=True,
+            )
+            return get_max_output_tokens() if limit is USE_DEFAULT_LIMIT else limit
+    return None
 
 
 def get_usage_log_filename(default="llm_usage.jsonl"):

@@ -1,5 +1,5 @@
 from agent.llm import get_response_from_llm
-from agent.config import get_configured_model
+from agent.config import get_agent_max_output_tokens, get_configured_model
 from agent.usage import usage_context
 
 
@@ -123,6 +123,7 @@ TASK:
         response, _, _ = get_response_from_llm(
             msg=instruction,
             model=get_configured_model("prompt_design_task_agent", "hosted_vllm/gemma-4"),
+            max_tokens=get_agent_max_output_tokens("prompt_design_task_agent"),
         )
 
     return response
