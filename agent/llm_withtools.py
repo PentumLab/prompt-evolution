@@ -13,7 +13,7 @@ def get_tooluse_prompt(tool_infos=[]):
     if not tool_infos or len(tool_infos) == 0:
         return ""
     # Create the prompt
-    tools_available = [str(tool_info) for tool_info in tool_infos]
+    tools_available = [json.dumps(tool_info, ensure_ascii=False) for tool_info in tool_infos]
     tools_available = '\n\n'.join(tools_available) if tools_available else 'None'
     tooluse_prompt = """Here are the available tools:
 ```
@@ -32,7 +32,17 @@ ONLY USE ONE TOOL PER RESPONSE, AND STRICTLY FOLLOW THE FORMAT OF TOOL_NAME AND 
 DO NOT HALLUCINATE OR MAKE UP ANYTHING.
 Do not use <function_calls>, <invoke_tool>, XML tool calls, or any other
 tool-call syntax.
+
+The tool_input must be a JSON object, not a quoted JSON string. Use double
+quotes for JSON strings and escape newlines inside strings as \\n.
+After a tool call, stop and wait for the real tool result. When the task is
+complete, reply with a short plain-text summary without a tool call.
 """.format(tools_available=tools_available)
+    names = {info["name"] for info in tool_infos}
+    if "editor" in names:
+        example = {"tool_name": "editor", "tool_input": {
+            "command": "view", "path": "/absolute/path/to/target.py"}}
+        tooluse_prompt += "\nExample (replace the path with the actual target):\n<json>" + json.dumps(example) + "</json>"
     return tooluse_prompt.strip()
 
 def get_tool_retry_message(response, tool_uses=None):
@@ -245,6 +255,32 @@ def process_tool_call(tools_dict, tool_name, tool_input):
         return f"Error executing tool '{tool_name}': {str(e)}"
 
 
+def retain_executed_tool_call(response, history, multiple_tool_calls=False):
+    """Do not feed unexecuted calls or imagined results back to the model."""
+    calls = check_for_tool_uses(response)
+    if multiple_tool_calls or not calls:
+        return response
+    response = '<json>\n' + json.dumps(calls[0], ensure_ascii=False) + '\n</json>'
+    if history and history[-1].get('role') == 'assistant':
+        history[-1] = dict(history[-1])
+        key = 'text' if 'text' in history[-1] else 'content'
+        history[-1][key] = response
+    return response
+
+
+def tool_budget_notice(limit, used):
+    if limit <= 0:
+        return ''
+    remaining = max(0, limit - used)
+    message = (f'TOOL BUDGET: {remaining} remaining out of {limit} for this entire run. '
+               'Each executed tool attempt (including failures) and each tool-format correction '
+               'consumes one slot. Corrections share this budget to prevent endless retry loops. '
+               'Prioritize required work over optional documentation.')
+    if remaining == 0:
+        message += ' No further tools can execute. Reply in plain text and explicitly report any unfinished work.'
+    return '\n\n' + message
+
+
 def _save_resume_state(path, **state):
     if not path:
         return
@@ -266,7 +302,7 @@ def chat_with_agent(
     logging=print,
     tools_available=[],  # Empty list means no tools, 'all' means all tools
     multiple_tool_calls=False,  # Whether to allow multiple tool calls in a single response
-    max_tool_calls=40,  # Maximum number of tool calls allowed in a single response, -1 for unlimited
+    max_tool_calls=40,  # Shared tool-attempt and format-correction budget; -1 for unlimited
     max_tokens=USE_CONFIG_MAX_TOKENS,
     resume_state_file=None,
     resume=False,
@@ -310,12 +346,13 @@ def chat_with_agent(
                 complete=False,
             )
             response, new_msg_history, info = get_response_fn(
-                msg=pending_msg,
+                msg=pending_msg + tool_budget_notice(max_tool_calls, num_tool_calls),
                 model=model,
                 msg_history=new_msg_history,
                 max_tokens=max_tokens,
             )
             logging(f"Output: {repr(response)}")
+            response = retain_executed_tool_call(response, new_msg_history, multiple_tool_calls)
             _save_resume_state(
                 resume_state_file,
                 msg_history=new_msg_history,
@@ -326,6 +363,7 @@ def chat_with_agent(
             )
         else:
             logging("Continuing from last saved model response.")
+            response = retain_executed_tool_call(response, new_msg_history, multiple_tool_calls)
         # logging(f"Info: {repr(info)}")
 
         # Tool use
@@ -347,13 +385,11 @@ def chat_with_agent(
                     tool_input = tool_use['tool_input']
                     tool_output = process_tool_call(tools_dict, tool_name, tool_input)
                     num_tool_calls += 1
-                    tool_msg = f'''<json>
-    {{
-        "tool_name": "{tool_name}",
-        "tool_input": {tool_input},
-        "tool_output": "{tool_output}"
-    }}
-    </json>'''.strip()
+                    tool_msg = "<json>\n" + json.dumps({
+                        "tool_name": tool_name,
+                        "tool_input": tool_input,
+                        "tool_output": tool_output,
+                    }, ensure_ascii=False) + "\n</json>"
                     logging(f"Tool output: {repr(tool_msg)}")
                     tool_msgs.append(tool_msg)
 
@@ -361,10 +397,12 @@ def chat_with_agent(
             if tool_retry_message:
                 logging(tool_retry_message)
                 tool_msgs.append(tool_retry_message)
+                # Bound malformed-call retries using the same run budget.
                 num_tool_calls += 1
 
             # Get tool response
-            pending_msg = system_msg + '\n\n'.join(tool_msgs)
+            # Tool definitions remain in the first history message.
+            pending_msg = '\n\n'.join(tool_msgs)
             _save_resume_state(
                 resume_state_file,
                 msg_history=new_msg_history,
@@ -373,12 +411,13 @@ def chat_with_agent(
                 complete=False,
             )
             response, new_msg_history, info = get_response_fn(
-                msg=pending_msg,
+                msg=pending_msg + tool_budget_notice(max_tool_calls, num_tool_calls),
                 model=model,
                 msg_history=new_msg_history,
                 max_tokens=max_tokens,
             )
             logging(f"Output: {repr(response)}")
+            response = retain_executed_tool_call(response, new_msg_history, multiple_tool_calls)
             _save_resume_state(
                 resume_state_file,
                 msg_history=new_msg_history,

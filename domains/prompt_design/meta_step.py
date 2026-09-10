@@ -23,7 +23,8 @@ from domains.prompt_design.evolution_state import (
 
 def build_instruction(report, source_generation, target_generation, scope, workspace_dir):
     target_file = ROOT_DIR / "prompt_design_agent.py"
-    task_file = ROOT_DIR / "domains" / "prompt_design" / "task.md"
+    source_prompt_file = ROOT_DIR / "domains" / "prompt_design" / "prompt.md"
+    guidance_file = ROOT_DIR / "domains" / "prompt_design" / "guidance.md"
     previous_generation_dir = generation_dir(source_generation)
 
     common = f"""
@@ -50,9 +51,14 @@ The evaluation and task context needed for this run are included here. Use the
 parent generation artifacts when they help you understand what the current
 agent produced and how it was evaluated.
 
+This domain improves an existing source prompt instead of designing a prompt
+from scratch. The generator should preserve the source prompt's core purpose
+while improving clarity, robustness, operational rules, and consistency.
+
 You may read:
 - {target_file}
-- {task_file}
+- {source_prompt_file}
+- {guidance_file}
 - files inside {previous_generation_dir}
 - files inside {workspace_dir}
 
@@ -63,8 +69,8 @@ You may freely create, edit, and remove files inside:
 - {workspace_dir}
 
 If you want to reinterpret, summarize, or adapt the task for this run, write
-that as a new artifact inside the workspace. Keep the original task file and
-all evaluation/report files unchanged.
+that as a new artifact inside the workspace. Keep the source prompt, guidance
+file, and all evaluation/report files unchanged.
 
 Make an actual code change to {target_file}. Do not merely describe changes.
 
@@ -107,26 +113,35 @@ STRICT CONSTRAINTS:
 - Keep the existing single Task-Agent LLM call.
 - Do not add runtime evaluator logic or extra model calls.
 - Improve the prompt-generation strategy inside generate_prompt().
+- Preserve the behavior that the Task-Agent improves an existing prompt and
+  does not replace it with an unrelated prompt.
 
 IMPLEMENTATION PROTOCOL:
 - Make exactly one small but meaningful improvement.
 - First use editor view on the target file.
 - Then use editor str_replace on a short exact substring copied verbatim from
   the file you viewed.
+- Prioritize the actual edit before exploration or documentation. Do not list
+  directories or create notes, reports, checklists, or summaries before editing.
+- If an edit fails, use the real error and file contents to fix that edit next.
+- Never assume a proposed tool call was executed. Only real tool results prove
+  that a change or validation happened.
 - Do not replace the whole function or whole file.
 - Do not use sed.
-- Use the workspace for notes or helper files if needed.
 - After the edit, view the file again.
 - Then run py_compile.
+- Only after the edit and validation succeed may you write optional workspace
+  documentation. Documentation is not required; prefer finishing immediately
+  with a short plain-text summary. Do not spend tools printing success messages.
+- Reserve remaining tool calls for the edit, verification, and necessary fixes.
 - Do not finish unless the target file actually changed.
 
 SUGGESTED TOOL CYCLE:
 1. editor view
 2. editor str_replace
-3. optional workspace notes or helper checks
-4. editor view
-5. bash py_compile
-6. finish
+3. editor view to verify the real change
+4. bash py_compile
+5. finish with a short plain-text summary (no tool call)
 """
 
     return common + """

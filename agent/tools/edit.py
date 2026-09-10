@@ -1,5 +1,8 @@
 from pathlib import Path
 import subprocess
+import io
+import re
+import tokenize
 
 def tool_info():
     return {
@@ -13,6 +16,7 @@ def tool_info():
 \nNotes for using the `str_replace` command:
 * The `old_str` parameter should match EXACTLY one or more consecutive lines from the original file. Be mindful of whitespaces!
 * If the `old_str` parameter is not unique in the file, the replacement will not be performed. Make sure to include enough context in `old_str` to make it unique
+* Line numbers in view output are display labels, not file content. Prefer copying only the text. If you copy a numbered block, keep consecutive numbers: str_replace checks every old line against the current file before removing labels from old_str and new_str. Stale numbers are rejected; view the file again after edits.
 * The `new_str` parameter should contain the edited lines that should replace the `old_str`""",
         "input_schema": {
             "type": "object",
@@ -203,32 +207,140 @@ def view_file(path: Path, view_range=None) -> str:
     
     return format_output(content, str(path))
 
+def find_prompt_whitespace_match(content, old_str, path):
+    """Recover wrapping mistakes only inside Python triple-quoted strings."""
+    if path.suffix != '.py':
+        return None
+    words = re.split(r'\s+', old_str.replace('\\r\\n', '\n').replace('\\n', '\n').strip())
+    if len(words) < 8:
+        return None
+    pattern = r'(?<!\w)' + r'\s+'.join(re.escape(word) for word in words) + r'(?!\w)'
+    matches = list(re.finditer(pattern, content))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    offsets = [0]
+    for line in content.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(content).readline):
+            # Python <=3.11 emits STRING; >=3.12 emits FSTRING_MIDDLE.
+            if token.type == tokenize.STRING:
+                opening = re.match(r"(?i)[rubf]*(\"\"\"|''')", token.string)
+                if not opening:
+                    continue
+                start = offsets[token.start[0] - 1] + token.start[1] + opening.end()
+                end = offsets[token.end[0] - 1] + token.end[1] - 3
+            elif token.type == getattr(tokenize, 'FSTRING_MIDDLE', -1):
+                start = offsets[token.start[0] - 1] + token.start[1]
+                end = offsets[token.end[0] - 1] + token.end[1]
+            else:
+                continue
+            if start <= match.start() and match.end() <= end:
+                return match.group(0)
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    return None
+
+
+def parse_numbered_block(text):
+    """Parse copied view labels without decoding escapes inside source lines."""
+    # Some models copy the JSON representation of view output literally.
+    # Decode only separators before another numbered row, never arbitrary \n
+    # or \t escapes inside the actual source code.
+    text = re.sub(r'\\n(?=[ \t]*\d+(?:\\t|\t|(?=\\n|\n|$)))', '\n', text)
+    if text.endswith('\\n'):
+        text = text[:-2]  # optional trailing display row separator
+    if text.endswith('\n'):
+        text = text[:-1]
+    numbers, lines = [], []
+    for row in text.split('\n'):
+        match = re.fullmatch(r'[ ]*(\d+)(?:\t|\\t)(.*)|[ ]*(\d+)', row)
+        if not match:
+            return None
+        numbers.append(int(match.group(1) or match.group(3)))
+        lines.append(match.group(2) or '')
+    if not numbers or numbers[0] < 1:
+        return None
+    if numbers != list(range(numbers[0], numbers[0] + len(numbers))):
+        return None
+    return numbers[0], lines
+
+
+def numbered_replacement(content, old_str, new_str):
+    old = parse_numbered_block(old_str)
+    if old is None:
+        return None
+    first, old_lines = old
+    current_lines = content.split('\n')
+    old_lines = [line.expandtabs() for line in old_lines]
+    if current_lines[first - 1:first - 1 + len(old_lines)] != old_lines:
+        raise ValueError('Numbered old_str does not match the current file at those lines. '
+                         'No replacement was performed. Line numbers may be stale; view the file again.')
+    new = parse_numbered_block(new_str)
+    if new is not None:
+        if new[0] != first:
+            raise ValueError('Numbered new_str must start at the same line as old_str. No replacement was performed.')
+        replacement = '\n'.join(new[1]).expandtabs()
+    else:
+        # Avoid writing a partially malformed set of display labels into code.
+        if re.search(r'(?m)^[ ]*\d+(?:\t|\\t)', new_str):
+            raise ValueError('Malformed numbered new_str. Use consecutive labels or plain replacement text.')
+        replacement = new_str.expandtabs()
+    start = sum(len(line) + 1 for line in current_lines[:first - 1])
+    end = start + len('\n'.join(old_lines))
+    return start, end, replacement
+
+
 def replace_text(path: Path, old_str: str, new_str: str) -> str:
     """Replace text in file."""
     content = read_file(path).expandtabs()
+    raw_old, raw_new = old_str, new_str if new_str is not None else ""
     old_str = old_str.expandtabs()
     new_str = new_str.expandtabs() if new_str is not None else ""
     
     # Check for exact match and uniqueness
     occurrences = content.count(old_str)
+    recovery_note = ''
+    numbered = None
     if occurrences == 0:
-        raise ValueError(f"No replacement was performed, old_str `{old_str}` did not appear verbatim in {path}")
+        numbered = numbered_replacement(content, raw_old, raw_new)
+        if numbered is not None:
+            start, end, new_str = numbered
+            old_str = content[start:end]
+            recovery_note = 'Verified copied line numbers against the current file and removed display labels. '
+        else:
+            recovered = find_prompt_whitespace_match(content, old_str, path)
+            if recovered is None:
+                raise ValueError(f"No replacement was performed, old_str `{old_str}` did not appear verbatim in {path}. No unique safe whitespace match was found. View the relevant lines and copy a short exact substring; do not repeat the same failed call.")
+            old_str = recovered
+            recovery_note = 'Recovered a unique whitespace/line-break mismatch inside a Python string. The replacement text was used unchanged. '
+        occurrences = 1
     if occurrences > 1:
-        lines = [idx + 1 for idx, line in enumerate(content.split("\n")) if old_str in line]
-        raise ValueError(f"No replacement was performed. Multiple occurrences of old_str `{old_str}` in lines {lines}. Please ensure it is unique")
+        # Search the whole file: a multi-line old_str cannot match one split line.
+        starts = [match.start() for match in re.finditer(re.escape(old_str), content)]
+        lines = [content.count('\n', 0, start) + 1 for start in starts]
+        raise ValueError(
+            f"No replacement was performed. old_str matches {occurrences} locations, "
+            f"starting at lines {lines}. Do not repeat this unchanged call. "
+            "Choose the intended location: include unique surrounding text, or use "
+            "a consecutively numbered block copied from a fresh editor view "
+            "(numbered old_str is checked against the current file). "
+            "No location was selected automatically."
+        )
     
     # Save to history and perform replacement
     file_history.add(str(path), content)
-    new_content = content.replace(old_str, new_str)
+    new_content = content[:start] + new_str + content[end:] if numbered is not None else content.replace(old_str, new_str)
     write_file(path, new_content)
     
     # Create snippet of edited section
-    replacement_line = content.split(old_str)[0].count("\n")
+    replacement_line = content[:start].count("\n") if numbered is not None else content.split(old_str)[0].count("\n")
     start_line = max(0, replacement_line - 4)
     end_line = replacement_line + 4 + new_str.count("\n")
     snippet = "\n".join(new_content.split("\n")[start_line:end_line + 1])
     
-    return (f"The file {path} has been edited. " + 
+    return (f"The file {path} has been edited. " + recovery_note +
             format_output(snippet, f"a snippet of {path}", start_line + 1) +
             "Review the changes and make sure they are as expected. Edit the file again if necessary.")
 

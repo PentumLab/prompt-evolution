@@ -23,12 +23,13 @@ Prompt Evolution ist ein experimentelles Framework zur evolutionären Optimierun
 
 Das Projekt basiert direkt auf [HyperAgents](https://github.com/facebookresearch/HyperAgents) und übernimmt dessen Grundidee eines Meta-Agenten, der nicht nur Antworten erzeugt, sondern die Implementierung des Agentensystems selbst untersuchen und verändern kann.
 
-Der erste Referenz-Task ist die Evolution eines System-Prompts für einen evidenzbasierten Fact-Checker von X-Posts.
+Der erste Referenz-Task ist die evolutionäre Verbesserung eines vorhandenen
+System-Prompts für einen evidenzbasierten Fact-Checker von X-Posts.
 
 ## Grundprinzip
 
 ```text
-Task / Ausgangsspezifikation
+Vorhandener Source Prompt
             |
             v
       Prompt Generator
@@ -49,7 +50,9 @@ Task / Ausgangsspezifikation
             +------> nächste Generation
 ```
 
-Der Task-Agent erzeugt zunächst einen Kandidaten-Prompt. Dieser wird bewertet. Anschließend erhält der Meta-Agent die Evaluation und analysiert die aktuelle Implementierung.
+Der Task-Agent erzeugt zunächst aus einem vorhandenen Source Prompt einen
+verbesserten Kandidaten-Prompt. Dieser wird bewertet. Anschließend erhält der
+Meta-Agent die Evaluation und analysiert die aktuelle Implementierung.
 
 Im eingeschränkten Modus optimiert er die Prompt-Generierungsstrategie. Im vollständigen Modus darf er zusätzlich relevante Teile des Agenten-Codes und des Workflows verändern.
 
@@ -63,9 +66,17 @@ Die Prompt-Evolution-Domain befindet sich unter:
 domains/prompt_design/
 ```
 
-Die Datei [`domains/prompt_design/task.md`](domains/prompt_design/task.md) enthält die Ausgangsspezifikation für einen Fact-Checking-System-Prompt.
+Die Datei [`domains/prompt_design/prompt.md`](domains/prompt_design/prompt.md)
+enthält den vorhandenen Source Prompt, der verbessert werden soll.
 
-Sie enthält bewusst konkrete Designannahmen. Diese müssen nicht zwangsläufig optimal sein. Der Meta-Agent erhält die Bewertung einer Generation als Feedback für den nächsten Evolutionsschritt.
+Die Datei [`domains/prompt_design/guidance.md`](domains/prompt_design/guidance.md)
+enthält die Verbesserungsleitlinie. Sie beschreibt, dass der Prompt analysiert
+und verbessert werden soll, ohne seinen Kern, seine Domäne, sein Ausgabeformat
+oder seine Sicherheitsgrenzen zu verlieren.
+
+Der Meta-Agent erhält die Bewertung einer Generation als Feedback für den
+nächsten Evolutionsschritt und verbessert die Strategie, mit der der vorhandene
+Prompt überarbeitet wird.
 
 Generierte Candidate Prompts, Evaluationen und Reports werden unter `outputs/` abgelegt und nicht in Git gespeichert.
 
@@ -169,6 +180,20 @@ Vor dem ersten Evolutionslauf muss der dafür verwendete OpenAI-kompatible Model
 
 ### 5. Generation 0 erzeugen
 
+Lege zuerst den vorhandenen Prompt in dieser Datei ab:
+
+```text
+domains/prompt_design/prompt.md
+```
+
+Optional kann die Verbesserungsleitlinie angepasst werden:
+
+```text
+domains/prompt_design/guidance.md
+```
+
+Dann erzeugst du den ersten Candidate Prompt:
+
 ```bash
 PYTHONPATH=. python domains/prompt_design/harness.py --generation 0
 ```
@@ -179,7 +204,16 @@ Der erzeugte Prompt wird gespeichert unter:
 outputs/prompt_design/gen_000/candidate_prompt.txt
 ```
 
-Damit entsteht die Ausgangsgeneration aus der eingecheckten, noch nicht evolvierten Prompt-Generierungsstrategie.
+Damit entsteht die Ausgangsgeneration aus der eingecheckten, noch nicht
+evolvierten Prompt-Verbesserungsstrategie.
+
+Alternativ kann ein anderer Source Prompt übergeben werden:
+
+```bash
+PYTHONPATH=. python domains/prompt_design/harness.py \
+  --generation 0 \
+  --source-prompt /path/to/source_prompt.md
+```
 
 Den aktuellen Zustand der Generationen kannst du jederzeit prüfen:
 
@@ -255,7 +289,8 @@ generate_prompt(task: str) -> str
 
 erhalten.
 
-Der Task-Agent verwendet weiterhin einen einzelnen Modellaufruf. Der Meta-Agent optimiert die Strategie, mit der der eigentliche System-Prompt erzeugt wird.
+Der Task-Agent verwendet weiterhin einen einzelnen Modellaufruf. Der Meta-Agent
+optimiert die Strategie, mit der der vorhandene Source Prompt verbessert wird.
 
 Der frühere `full`-Scope ist in der schlanken Prompt-Evolution-Mini-Loop noch
 nicht aktiviert, weil dieser Ablauf aktuell nur `prompt_design_agent.py` sauber
@@ -381,7 +416,7 @@ Generation.
 ## Typischer Zyklus
 
 ```bash
-# 1. Candidate Prompt erzeugen
+# 1. Candidate Prompt aus vorhandenem Source Prompt erzeugen
 PYTHONPATH=. python domains/prompt_design/harness.py --generation 0
 
 # 2. outputs/prompt_design/gen_000/manual_evaluation.json anlegen
@@ -460,11 +495,14 @@ domains/
     HyperAgents-Domains und Prompt-Evolution-Domains
 
 domains/prompt_design/
-    task.md
-        Ausgangsspezifikation
+    prompt.md
+        vorhandener Source Prompt, der verbessert werden soll
+
+    guidance.md
+        Verbesserungsleitlinie für den Source Prompt
 
     harness.py
-        erzeugt Candidate Prompts für eine Generation
+        erzeugt Candidate Prompts für eine Generation aus prompt.md und guidance.md
 
     manual_evaluator.py
         validiert manuelle Bewertungen und erzeugt report.json
@@ -476,7 +514,7 @@ domains/prompt_design/
         verwaltet Snapshots, Parent-Auswahl, Restore, Validierung und archive.jsonl
 
 prompt_design_agent.py
-    initialer Prompt-Generator für Generation 0
+    initialer Prompt-Verbesserer für Generation 0
 
 outputs/
     generierte Experiment-Artefakte

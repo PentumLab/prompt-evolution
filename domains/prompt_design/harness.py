@@ -16,7 +16,26 @@ from domains.prompt_design.evolution_state import (
 
 
 BASE_DIR = Path(__file__).parent
-TASK_FILE = BASE_DIR / "task.md"
+SOURCE_PROMPT_FILE = BASE_DIR / "prompt.md"
+GUIDANCE_FILE = BASE_DIR / "guidance.md"
+
+
+def build_improvement_task(source_prompt, guidance):
+    return f"""Improve the existing prompt below.
+
+The goal is not to replace it with an unrelated prompt. First infer what the
+prompt is meant to do, then improve clarity, robustness, structure,
+operational rules, and efficiency while preserving its core purpose,
+audience, constraints, and output contract.
+
+Return only the improved prompt.
+
+SOURCE PROMPT TO IMPROVE:
+{source_prompt}
+
+IMPROVEMENT GUIDANCE:
+{guidance}
+"""
 
 
 def load_generate_prompt(generation):
@@ -36,9 +55,23 @@ def load_generate_prompt(generation):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--generation", type=int, required=True)
+    parser.add_argument(
+        "--source-prompt",
+        default=str(SOURCE_PROMPT_FILE),
+        help="Path to the existing prompt that should be improved.",
+    )
+    parser.add_argument(
+        "--guidance",
+        default=str(GUIDANCE_FILE),
+        help="Path to optional improvement and evaluation guidance.",
+    )
     args = parser.parse_args()
 
-    task = TASK_FILE.read_text(encoding="utf-8")
+    source_prompt_path = Path(args.source_prompt).expanduser()
+    guidance_path = Path(args.guidance).expanduser()
+    source_prompt = source_prompt_path.read_text(encoding="utf-8")
+    guidance = guidance_path.read_text(encoding="utf-8")
+    task = build_improvement_task(source_prompt, guidance)
     generate_prompt = load_generate_prompt(args.generation)
 
     with usage_context(
@@ -64,6 +97,8 @@ def main():
         {
             "candidate_prompt": str(output_file),
             "agent_snapshot": str(snapshot_path(args.generation)),
+            "source_prompt": str(source_prompt_path),
+            "guidance": str(guidance_path),
         },
     )
 

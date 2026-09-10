@@ -1,0 +1,2 @@
+# Store text with LF and check it out with LF on every platform.
+* text=auto eol=lf
