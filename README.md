@@ -78,9 +78,12 @@ Der Meta-Agent erhält die Bewertung einer Generation als Feedback für den
 nächsten Evolutionsschritt und verbessert die Strategie, mit der der vorhandene
 Prompt überarbeitet wird.
 
-Generierte Candidate Prompts, Evaluationen und Reports werden unter `outputs/` abgelegt und nicht in Git gespeichert.
+Generierte Candidate Prompts, Evaluationen und Reports werden bei einem konfigurierten Lauf unter `runs/<run-name>/` abgelegt und nicht in Git gespeichert.
 
 ## Quickstart
+
+Kopierbare Einzelbefehle für den gesamten manuellen Ablauf stehen in
+[`README_COMMANDS.md`](README_COMMANDS.md).
 
 ### 1. Repository klonen
 
@@ -113,10 +116,11 @@ Für den aktuellen Meta-Agenten wird ein Anthropic API-Key benötigt:
 ANTHROPIC_API_KEY=...
 ```
 
-Die mitgelieferte `.env.example` enthält außerdem einen lokalen OpenAI-kompatiblen vLLM-Endpunkt:
+Für ein lokal bereitgestelltes Modell wird der OpenAI-kompatible vLLM-Endpunkt
+in `hyperagent_config.json` unter `providers.hosted_vllm_api_base` eingestellt:
 
 ```text
-HOSTED_VLLM_API_BASE=http://127.0.0.1:8000/v1
+http://127.0.0.1:8000/v1
 ```
 
 `hyperagent_config.json` ist die lokale, nicht eingecheckte Runtime-Konfiguration.
@@ -178,6 +182,70 @@ hosted_vllm/gemma-4
 
 Vor dem ersten Evolutionslauf muss der dafür verwendete OpenAI-kompatible Modell-Endpunkt erreichbar sein.
 
+## Automatischer Evolutionslauf
+
+Für einen vollständigen Lauf mit Initialisierung, Generation 0, Meta-Agent,
+Task-Agent, Prüfer, Resume-Unterstützung und Parent-Auswahl verwende:
+
+```bash
+PYTHONPATH=. python domains/prompt_design/evolution_loop.py \
+  --config configs/prompt_evolution_run.example.json
+```
+
+Eine konkrete Konfiguration kann kopiert und angepasst werden:
+
+```bash
+cp configs/prompt_evolution_run.example.json configs/my_run.json
+PYTHONPATH=. python domains/prompt_design/evolution_loop.py \
+  --config configs/my_run.json
+```
+
+Der `run_dir` in der Konfiguration bestimmt den vollständigen Ausgabebereich.
+Dort liegen unter anderem `outputs/prompt_design`, `llm_usage.jsonl`,
+`loop.log`, Entscheidungsdaten und optionale Post-Step-Ergebnisse. Wird der
+Prozess unterbrochen, wird er mit demselben Befehl und `--resume` fortgesetzt:
+
+```bash
+PYTHONPATH=. python domains/prompt_design/evolution_loop.py \
+  --config configs/my_run.json --resume
+```
+
+Fehlt nach einem alten Fehler eine gültige Resume-Datei, startet die Loop nur
+die betroffene Generation erneut. Bereits abgeschlossene Generationen bleiben
+erhalten.
+
+Die Loop wertet jede Generation automatisch aus und stoppt bei fehlenden
+Artefakten, ungültigen Reports, zu starker Verschlechterung oder erkannter
+Stagnation. Die Grenzwerte stehen im Abschnitt `loop` der Run-Konfiguration.
+
+Nach der Initialisierung und nach jeder abgeschlossenen Generation kann ein
+beliebiges Script über `post_step` aufgerufen werden. Es erhält den aktuellen
+Stand des Laufs und eignet sich zum Beispiel für Fortschrittsanzeigen,
+zusätzliche Auswertungen, Exporte, Archivierung oder Benachrichtigungen. Der
+Hook kann unabhängig vom eigentlichen Evolutionsablauf aktiviert oder
+deaktiviert werden.
+
+Das Script erhält standardisierte Parameter wie `--generation`, `--run-dir`,
+`--output-dir`, `--source-prompt`, `--usage-log`, `--decision-file` und
+`--config`. Zusätzliche Parameter werden unter `post_step.params` angegeben.
+Schlüssel werden als CLI-Optionen übergeben; boolesche Werte werden als Flags
+behandelt.
+
+Beispiel für einen Fortschritts-Tracker:
+
+```json
+"post_step": {
+  "enabled": true,
+  "script": "scripts/update_progress.py",
+  "params": {
+    "format": "json",
+    "notify": true
+  }
+}
+```
+
+Das Script kann die übergebenen Laufdaten in beliebiger Form weiterverarbeiten.
+
 ### 5. Generation 0 erzeugen
 
 Lege zuerst den vorhandenen Prompt in dieser Datei ab:
@@ -226,7 +294,10 @@ Generation als Parent für weitere Evolutionsschritte auswählbar ist.
 
 ### 6. Generation bewerten
 
-Die aktuelle Implementierung verwendet eine manuelle Evaluation.
+Ein automatischer Lauf verwendet den geschützten Prüfer aus
+`domains/prompt_design/evaluator/`. Modell, Modus (`simple` oder `comparison`)
+und Output-Limit werden in der Run-Konfiguration festgelegt. Eine manuelle
+Bewertung ist weiterhin für einzelne Tests möglich:
 
 Lege folgende Datei an:
 
@@ -461,8 +532,9 @@ Modelle, per-call Output-Limits und kumulative Token-Limits werden in
 Ein Lauf erzeugt beispielsweise:
 
 ```text
-outputs/
-└── prompt_design/
+runs/<run-name>/
+└── outputs/
+    └── prompt_design/
     ├── archive.jsonl
     ├── gen_000/
     │   ├── prompt_design_agent.py
@@ -483,7 +555,9 @@ outputs/
 
 Diese Dateien sind Experiment-Artefakte und werden nicht in Git eingecheckt.
 
-Ein HTML-/Webseiten-Report-Generator ist im aktuellen Repository nicht enthalten.
+Ein Post-Step kann einen HTML- oder anderen Report-Generator aufrufen. Das
+Repository schreibt keine Website verpflichtend vor; das konkrete Script wird
+über die Run-Konfiguration festgelegt.
 
 ## Projektstruktur
 

@@ -19,12 +19,15 @@ from domains.prompt_design.evolution_state import (
     snapshot_agent,
     validate_meta_generation,
 )
+from domains.prompt_design.run_context import configure, resolve_config_path, run_root
 
 
 def build_instruction(report, source_generation, target_generation, scope, workspace_dir):
-    target_file = ROOT_DIR / "prompt_design_agent.py"
-    source_prompt_file = ROOT_DIR / "domains" / "prompt_design" / "prompt.md"
-    guidance_file = ROOT_DIR / "domains" / "prompt_design" / "guidance.md"
+    config = configure()
+    run_dir = run_root()
+    target_file = run_dir / "prompt_design_agent.py"
+    source_prompt_file = resolve_config_path(config, "source_prompt", ROOT_DIR / "domains" / "prompt_design" / "prompt.md")
+    guidance_file = resolve_config_path(config, "guidance", ROOT_DIR / "domains" / "prompt_design" / "guidance.md")
     previous_generation_dir = generation_dir(source_generation)
 
     common = f"""
@@ -88,6 +91,10 @@ TOOL PROTOCOL:
 - Never use <function_calls>, <invoke_tool>, XML tool calls, or any other
   tool-call syntax.
 - Never simulate a tool result.
+- Every editor call must include the absolute `path` inside `tool_input`.
+- For `str_replace`, use `command`, `path`, `old_str`, and `new_str` together.
+- If editor returns an error, correct the JSON and retry editor; do not switch
+  to bash, sed, or another editing method.
 - Wait for the real tool result before making the next tool call.
 
 After editing:
@@ -140,8 +147,7 @@ SUGGESTED TOOL CYCLE:
 1. editor view
 2. editor str_replace
 3. editor view to verify the real change
-4. bash py_compile
-5. finish with a short plain-text summary (no tool call)
+4. finish with a short plain-text summary (the loop performs py_compile)
 """
 
     return common + """
@@ -182,12 +188,14 @@ def main():
     )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--config", default=None)
     parser.add_argument(
         "--scope",
         choices=["prompt", "full"],
         default="prompt",
     )
     args = parser.parse_args()
+    configure(args.config)
     if args.scope != "prompt":
         parser.error(
             "--scope full is not supported by the prompt_design mini-loop yet. "
@@ -223,13 +231,14 @@ def main():
     workspace_dir = target_dir / "meta_workspace"
     workspace_dir.mkdir(parents=True, exist_ok=True)
     pre_restore_backup = target_dir / "pre_restore_prompt_design_agent.py"
-    if not args.resume and (ROOT_DIR / "prompt_design_agent.py").exists():
-        shutil.copyfile(ROOT_DIR / "prompt_design_agent.py", pre_restore_backup)
+    agent_file = run_root() / "prompt_design_agent.py"
+    if not args.resume and agent_file.exists():
+        shutil.copyfile(agent_file, pre_restore_backup)
     if not args.resume:
         restore_agent(source_generation)
 
     report_file = (
-        ROOT_DIR
+        run_root()
         / "outputs"
         / "prompt_design"
         / f"gen_{source_generation:03d}"
@@ -266,7 +275,7 @@ def main():
                 msg=instruction,
                 model=get_configured_model("meta_agent", CLAUDE_HAIKU_45_MODEL),
                 logging=log,
-                tools_available=["editor", "bash"],
+                tools_available=["editor"],
                 max_tool_calls=get_agent_max_tool_calls("meta_agent"),
                 max_tokens=get_agent_max_output_tokens("meta_agent"),
                 resume_state_file=resume_state_file,
@@ -292,7 +301,7 @@ def main():
         rebuild_archive()
         print(f"Run interrupted. Resume state written to: {resume_state_file}")
         raise
-    py_compile.compile(str(ROOT_DIR / "prompt_design_agent.py"), doraise=True)
+    py_compile.compile(str(agent_file), doraise=True)
     snapshot_file = snapshot_agent(target_generation)
     patch_file = create_patch(source_generation, target_generation)
     validation_errors = validate_meta_generation(source_generation, target_generation)

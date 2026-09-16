@@ -10,6 +10,7 @@ from agent.config import (
     get_hosted_vllm_api_base,
     get_max_output_tokens,
     get_model_max_output_tokens,
+    get_model_reasoning_effort,
 )
 from agent.usage import check_token_budget, log_usage
 
@@ -17,9 +18,11 @@ load_dotenv()
 
 USE_CONFIG_MAX_TOKENS = object()
 
-CLAUDE_MODEL = "anthropic/claude-sonnet-4-5-20250929"
-CLAUDE_HAIKU_MODEL = "anthropic/claude-3-haiku-20240307"
-CLAUDE_35NEW_MODEL = "anthropic/claude-3-5-sonnet-20241022"
+CLAUDE_MODEL = "anthropic/claude-sonnet-4-6"
+CLAUDE_HAIKU_MODEL = "anthropic/claude-haiku-4-5-20251001"
+CLAUDE_35NEW_MODEL = "anthropic/claude-sonnet-4-6"
+CLAUDE_SONNET_46_MODEL = "anthropic/claude-sonnet-4-6"
+CLAUDE_SONNET_5_MODEL = "anthropic/claude-sonnet-5"
 OPENAI_MODEL = "openai/gpt-4o"
 OPENAI_MINI_MODEL = "openai/gpt-4o-mini"
 OPENAI_O3_MODEL = "openai/o3"
@@ -28,6 +31,10 @@ OPENAI_O4MINI_MODEL = "openai/o4-mini"
 OPENAI_GPT52_MODEL = "openai/gpt-5.2"
 OPENAI_GPT5_MODEL = "openai/gpt-5"
 OPENAI_GPT5MINI_MODEL = "openai/gpt-5-mini"
+OPENAI_GPT56_MODEL = "openai/gpt-5.6"
+OPENAI_GPT56_SOL_MODEL = "openai/gpt-5.6-sol"
+OPENAI_GPT56_TERRA_MODEL = "openai/gpt-5.6-terra"
+OPENAI_GPT56_LUNA_MODEL = "openai/gpt-5.6-luna"
 GEMINI_3_MODEL = "gemini/gemini-3-pro-preview"
 GEMINI_MODEL = "gemini/gemini-2.5-pro"
 GEMINI_FLASH_MODEL = "gemini/gemini-2.5-flash"
@@ -92,16 +99,19 @@ def get_response_from_llm(
         if api_base:
             completion_kwargs["api_base"] = api_base
 
-    # GPT-5 and GPT-5-mini only support default temperature (1), skip it
-    # GPT-5.2 supports temperature
-    if model in ["openai/gpt-5", "openai/gpt-5-mini"]:
+    # Reasoning models reject sampling temperature; use their effort setting.
+    if model.startswith(("openai/gpt-5", "openai/o3", "openai/o4")):
         pass  # Don't set temperature
     else:
         completion_kwargs["temperature"] = temperature
 
-    # GPT-5 models require max_completion_tokens instead of max_tokens
+    reasoning_effort = get_model_reasoning_effort(model)
+    if reasoning_effort is not None:
+        completion_kwargs["reasoning_effort"] = reasoning_effort
+
+    # GPT-5 and o-series reasoning models require max_completion_tokens.
     if max_tokens is not None:
-        if "gpt-5" in model:
+        if model.startswith(("openai/gpt-5", "openai/o3", "openai/o4")):
             completion_kwargs["max_completion_tokens"] = max_tokens
         else:
             completion_kwargs["max_tokens"] = max_tokens

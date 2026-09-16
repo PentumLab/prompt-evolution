@@ -217,6 +217,23 @@ def get_model_max_output_tokens(model):
     return None
 
 
+def get_model_reasoning_effort(model):
+    """Return the configured reasoning effort for a model, if any."""
+    values = load_hyperagent_config().get("model_reasoning_effort", {})
+    if not isinstance(values, dict):
+        return None
+    for pattern, value in values.items():
+        if _model_matches(model, pattern):
+            effort = str(value).strip().lower()
+            allowed = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+            if effort not in allowed:
+                raise ValueError(
+                    f"model_reasoning_effort[{pattern}] must be one of {sorted(allowed)}"
+                )
+            return effort
+    return None
+
+
 def get_usage_log_filename(default="llm_usage.jsonl"):
     config = load_hyperagent_config()
     usage = config.get("usage", {})

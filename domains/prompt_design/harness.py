@@ -8,6 +8,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from agent.usage import usage_context
+from domains.prompt_design.run_context import configure, output_root, resolve_config_path
 from domains.prompt_design.evolution_state import (
     save_metadata,
     snapshot_agent,
@@ -16,8 +17,6 @@ from domains.prompt_design.evolution_state import (
 
 
 BASE_DIR = Path(__file__).parent
-SOURCE_PROMPT_FILE = BASE_DIR / "prompt.md"
-GUIDANCE_FILE = BASE_DIR / "guidance.md"
 
 
 def build_improvement_task(source_prompt, guidance):
@@ -55,20 +54,22 @@ def load_generate_prompt(generation):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--generation", type=int, required=True)
+    parser.add_argument("--config", default=None)
     parser.add_argument(
         "--source-prompt",
-        default=str(SOURCE_PROMPT_FILE),
+        default=None,
         help="Path to the existing prompt that should be improved.",
     )
     parser.add_argument(
         "--guidance",
-        default=str(GUIDANCE_FILE),
+        default=None,
         help="Path to optional improvement and evaluation guidance.",
     )
     args = parser.parse_args()
+    config = configure(args.config)
 
-    source_prompt_path = Path(args.source_prompt).expanduser()
-    guidance_path = Path(args.guidance).expanduser()
+    source_prompt_path = Path(args.source_prompt or resolve_config_path(config, "source_prompt", BASE_DIR / "prompt.md")).expanduser()
+    guidance_path = Path(args.guidance or resolve_config_path(config, "guidance", BASE_DIR / "guidance.md")).expanduser()
     source_prompt = source_prompt_path.read_text(encoding="utf-8")
     guidance = guidance_path.read_text(encoding="utf-8")
     task = build_improvement_task(source_prompt, guidance)
@@ -82,12 +83,7 @@ def main():
     ):
         response = generate_prompt(task)
 
-    output_dir = (
-        ROOT_DIR
-        / "outputs"
-        / "prompt_design"
-        / f"gen_{args.generation:03d}"
-    )
+    output_dir = output_root() / f"gen_{args.generation:03d}"
     output_file = output_dir / "candidate_prompt.txt"
 
     output_dir.mkdir(parents=True, exist_ok=True)

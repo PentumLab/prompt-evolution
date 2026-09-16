@@ -4,6 +4,20 @@ import io
 import re
 import tokenize
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROTECTED_ROOTS = (
+    PROJECT_ROOT / "domains" / "prompt_design" / "evaluator",
+    PROJECT_ROOT / "domains" / "prompt_design" / "evaluator_prompt.md",
+)
+
+
+def _is_protected(path):
+    """Keep evaluator implementation and prompt out of editor access."""
+    resolved = Path(path).resolve()
+    return any(resolved == root.resolve() or root.resolve() in resolved.parents
+               for root in PROTECTED_ROOTS)
+
 def tool_info():
     return {
         "name": "editor",
@@ -84,6 +98,9 @@ def maybe_truncate(content: str, max_length: int = 10000) -> str:
 def validate_path(path: str, command: str):
     """Validate file path and command combination."""
     path_obj = Path(path)
+
+    if _is_protected(path_obj):
+        raise ValueError("This path is protected during meta-agent runs.")
     
     # Check if it's an absolute path
     if not path_obj.is_absolute():
@@ -179,7 +196,9 @@ def view_file(path: Path, view_range=None) -> str:
             )
             if result.stderr:
                 return f"Error listing directory: {result.stderr}"
-            return f"Here's the files and directories up to 2 levels deep in {path}, excluding hidden items:\n{maybe_truncate(result.stdout, max_length=5000)}"
+            visible = [line for line in result.stdout.splitlines()
+                       if not _is_protected(Path(line))]
+            return f"Here's the files and directories up to 2 levels deep in {path}, excluding hidden items:\n{maybe_truncate(chr(10).join(visible), max_length=5000)}"
         except Exception as e:
             raise ValueError(f"Failed to list directory: {e}")
     

@@ -17,3 +17,16 @@ __pycache__/
 # Config files
 hyperagent_config.json
 **/hyperagent_config.json
+
+# Local credentials and per-experiment configuration
+.env.*
+!.env.example
+hyperagent_config.*.json
+!hyperagent_config.example.json
+configs/run_*.json
+
+
+# Local environments and experiment artifacts
+venv/
+.venv/
+

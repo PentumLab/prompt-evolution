@@ -1,5 +1,6 @@
 import difflib
 import json
+import os
 import py_compile
 import random
 import shutil
@@ -7,9 +8,10 @@ from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = ROOT_DIR / "outputs" / "prompt_design"
+RUN_ROOT = Path(os.getenv("PROMPT_EVOLUTION_RUN_DIR", str(ROOT_DIR))).expanduser().resolve()
+OUTPUT_DIR = RUN_ROOT / "outputs" / "prompt_design"
 ARCHIVE_FILE = OUTPUT_DIR / "archive.jsonl"
-AGENT_FILE = ROOT_DIR / "prompt_design_agent.py"
+AGENT_FILE = RUN_ROOT / "prompt_design_agent.py"
 SNAPSHOT_FILE = "prompt_design_agent.py"
 PATCH_FILE = "model_patch.diff"
 

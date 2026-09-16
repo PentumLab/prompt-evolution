@@ -57,7 +57,9 @@ def usage_context(log_path=None, agent_role=None, metadata=None):
         getattr(_local, "agent_role", None),
         getattr(_local, "metadata", {}),
     )
-    set_usage_context(log_path=log_path, agent_role=agent_role, metadata=metadata)
+    merged_metadata = dict(old[2] or {})
+    merged_metadata.update(metadata or {})
+    set_usage_context(log_path=log_path, agent_role=agent_role or old[1], metadata=merged_metadata)
     try:
         yield
     finally:
